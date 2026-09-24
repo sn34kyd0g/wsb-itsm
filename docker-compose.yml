@@ -13,12 +13,12 @@ services:
       - svcdesk-data:/data        # a NAMED volume is fine; "./data:/data" (a bind mount) fails check 1.02
     # Recommended, not required: a healthcheck makes "docker compose up --wait" wait for readiness.
     # python:3.13-slim has no curl, so this one uses Python. Adjust it if your image is not Python.
-    # healthcheck:
-    #   test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
-    #   interval: 5s
-    #   timeout: 3s
-    #   retries: 20
-    #   start_period: 5s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   # Stretch S3 (own tests): uncomment and adapt. The checker builds every image up front
   # (docker compose --profile tests build; a tests image that does not build costs S3, never Core), then runs
@@ -29,16 +29,16 @@ services:
   # depends_on with condition: service_healthy needs the healthcheck above (uncomment it too); otherwise
   # a cold run can race the service, so make your runner retry /health for a few seconds first.
   # Like svcdesk, the tests image is built before the grader blocks egress: install everything at build time.
-  # tests:
-  #   build: .
-  #   profiles: ["tests"]
-  #   working_dir: /app/src
-  #   depends_on:
-  #     svcdesk:
-  #       condition: service_healthy
-  #   environment:
-  #     SVCDESK_URL: http://svcdesk:8080   # your tests read the service URL from this variable
-  #   command: ["python", "-m", "tests.run"]   # your runner: runs the suite, prints the ITSMLAB-TESTS line last
+  tests:
+    build: .
+    profiles: ["tests"]
+    working_dir: /app/src
+    depends_on:
+      svcdesk:
+        condition: service_healthy
+    environment:
+      SVCDESK_URL: http://svcdesk:8080   # the suite reads the service URL from this variable
+    command: ["python", "-m", "tests.run"]   # runs src/tests/run.py, prints the ITSMLAB-TESTS line last
 
 volumes:
   svcdesk-data:

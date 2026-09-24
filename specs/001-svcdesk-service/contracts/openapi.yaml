@@ -1,0 +1,174 @@
+# ai-generated: 90% - Claude Code (spec-kit /speckit-plan) drafted from docs/API.md
+# Contract of svcdesk for Lab 1. docs/API.md is authoritative; this file restates it with the decisions
+# in force (C1 = business, C2 = immutable, C3 = matrix).
+openapi: 3.1.0
+info:
+  title: svcdesk
+  version: "1.0.0"
+  description: >
+    Service desk ticketing API. Every request may carry X-Test-Clock when SVCDESK_TEST_CLOCK is 1/true.
+    All responses are application/json. Errors are {"error": {"code", "message"}}.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status: { const: ok }
+                  service: { const: svcdesk }
+  /tickets:
+    post:
+      parameters: [{ $ref: "#/components/parameters/TestClock" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TicketCreate" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Ticket" } } }
+        "422": { $ref: "#/components/responses/Error" }
+    get:
+      parameters:
+        - { name: state, in: query, required: false, schema: { $ref: "#/components/schemas/State" } }
+        - { name: priority, in: query, required: false, schema: { $ref: "#/components/schemas/Priority" } }
+      responses:
+        "200":
+          description: All matching tickets, any order, no pagination
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Ticket" } }
+  /tickets/{id}:
+    get:
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: The ticket
+          content: { application/json: { schema: { $ref: "#/components/schemas/Ticket" } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /tickets/{id}/sla:
+    get:
+      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/TestClock" }]
+      responses:
+        "200":
+          description: SLA status at now
+          content: { application/json: { schema: { $ref: "#/components/schemas/SlaStatus" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /tickets/{id}/ack:
+    $ref: "#/components/pathItems/Action"
+  /tickets/{id}/start:
+    $ref: "#/components/pathItems/Action"
+  /tickets/{id}/resolve:
+    $ref: "#/components/pathItems/Action"
+  /tickets/{id}/close:
+    $ref: "#/components/pathItems/Action"
+  /tickets/{id}/reopen:
+    post:
+      description: >
+        resolved -> in_progress while now <= resolved_at + 7 days. A closed ticket always answers 409
+        (C2 = immutable); create a new ticket with related_to instead.
+      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/TestClock" }]
+      responses:
+        "200":
+          description: Reopened
+          content: { application/json: { schema: { $ref: "#/components/schemas/Ticket" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+components:
+  pathItems:
+    Action:
+      post:
+        description: Lifecycle action (see data-model.md state machine). 200 with the full ticket.
+        parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/TestClock" }]
+        responses:
+          "200":
+            description: Transition applied
+            content: { application/json: { schema: { $ref: "#/components/schemas/Ticket" } } }
+          "404": { $ref: "#/components/responses/Error" }
+          "409": { $ref: "#/components/responses/Error" }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    TestClock:
+      name: X-Test-Clock
+      in: header
+      required: false
+      description: RFC 3339 instant with offset; "now" for this request only. Unparseable -> 422.
+      schema: { type: string, format: date-time }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    enum: [validation, invalid_clock, not_found, method_not_allowed,
+                           invalid_transition, reopen_window_expired, ticket_closed]
+                  message: { type: string }
+  schemas:
+    State: { enum: [new, acknowledged, in_progress, resolved, closed] }
+    Priority: { enum: [P1, P2, P3, P4] }
+    Level: { type: integer, minimum: 1, maximum: 3 }
+    Reporter:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: [string, "null"], default: null }
+        vip: { type: boolean, default: false, description: "Stored; does not affect priority (C3 = matrix)" }
+    TicketCreate:
+      type: object
+      required: [title, reporter, impact, urgency]
+      description: Server-owned and unknown fields are ignored.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 4000, default: "" }
+        reporter: { $ref: "#/components/schemas/Reporter" }
+        impact: { $ref: "#/components/schemas/Level" }
+        urgency: { $ref: "#/components/schemas/Level" }
+        related_to: { type: [string, "null"], default: null }
+    Ticket:
+      allOf:
+        - $ref: "#/components/schemas/TicketCreate"
+        - type: object
+          required: [id, priority, state, created_at, sla]
+          properties:
+            id: { type: string }
+            priority: { $ref: "#/components/schemas/Priority" }
+            state: { $ref: "#/components/schemas/State" }
+            created_at: { type: string, format: date-time }
+            acknowledged_at: { type: [string, "null"], format: date-time }
+            resolved_at: { type: [string, "null"], format: date-time }
+            closed_at: { type: [string, "null"], format: date-time }
+            sla:
+              type: object
+              required: [ack_due_at, resolve_due_at]
+              properties:
+                ack_due_at: { type: string, format: date-time }
+                resolve_due_at: { type: string, format: date-time }
+    SlaStatus:
+      type: object
+      required: [priority, ack_due_at, resolve_due_at, ack_breached, resolve_breached, paused]
+      properties:
+        priority: { $ref: "#/components/schemas/Priority" }
+        ack_due_at: { type: string, format: date-time }
+        resolve_due_at: { type: string, format: date-time }
+        ack_breached: { type: boolean }
+        resolve_breached: { type: boolean }
+        paused: { type: boolean }

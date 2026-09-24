@@ -1,21 +1,4 @@
 <!-- ai-generated: 100% - Claude Code drafted from the course template files; review before committing -->
-<!--
-Sync Impact Report
-- Version change: 1.0.0 → 1.0.1 (PATCH)
-- 1.0.1: Principle III no longer lists the C1–C3 values (they were stale: wallclock/vip);
-  DECISIONS.md front matter is named the single source of truth. Title unchanged.
-- 1.0.0 (initial ratification), template placeholder → new title:
-  - [PRINCIPLE_1_NAME] → I. Spec-First, Receipt Before Code (NON-NEGOTIABLE)
-  - [PRINCIPLE_2_NAME] → II. Checker Contract Is the Definition of Done
-  - [PRINCIPLE_3_NAME] → III. Decisions Match Running Behaviour
-  - [PRINCIPLE_4_NAME] → IV. Deterministic Time and Durable State
-  - [PRINCIPLE_5_NAME] → V. Transparency: AI Disclosure and No Personal Data
-- Added sections: Technology & Operational Constraints; Development Workflow & Quality Gates;
-  Governance (filled)
-- Removed sections: none
-- Deferred TODOs: none
-- Note: this report is scratch material for review; remove it before committing.
--->
 # svcdesk Constitution
 
 ## Core Principles
