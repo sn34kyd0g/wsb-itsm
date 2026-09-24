@@ -1,8 +1,8 @@
 ---
 svcdesk_decisions:
-  C1: wallclock      # wallclock | business
+  C1: business       # wallclock | business
   C2: immutable      # reopen | immutable
-  C3: vip            # matrix | vip
+  C3: matrix         # matrix | vip
 ---
 <!-- ai-generated: ??% - TODO: replace ?? with your estimate and say how AI was used (the advisory flags this line until you do) -->
 
