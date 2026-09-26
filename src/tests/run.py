@@ -334,6 +334,101 @@ def earlier_clock_is_accepted():
     assert status == 200 and at(data["acknowledged_at"]) == at("2026-10-01T10:00:00Z"), (status, data)
 
 
+# ---- Lab 2: DORA metrics (METRIC-SPEC.md) ------------------------------------------------------------
+
+WINDOW = {"from": "2026-09-01T00:00:00Z", "to": "2026-09-22T00:00:00Z"}
+
+
+def commit(sha, when, change="CHG-1", reverts=None, branch="main"):
+    return {"event_id": f"c-{sha}", "type": "commit", "at": when, "sha": sha, "branch": branch,
+            "change_id": None if reverts else change, "reverts": reverts}
+
+
+def deploy(dep, when, commits, outcome="success", env="production", unplanned=False, caused_by=None):
+    return {"event_id": f"d-{dep}", "type": "deployment", "at": when, "deployment_id": dep, "environment": env,
+            "outcome": outcome, "commits": commits, "unplanned": unplanned, "caused_by": caused_by}
+
+
+def incident(inc, phase, when, deployments):
+    return {"event_id": f"i-{inc}-{phase}", "type": "incident", "at": when, "incident_id": inc, "phase": phase,
+            "deployments": deployments}
+
+
+def metrics(events, window=WINDOW):
+    status, data = req("POST", "/dora/metrics", {"window": window, "events": events})
+    assert status == 200, (status, data)
+    return data
+
+
+@test
+def dora_empty_log():
+    data = metrics([])
+    assert data["deployment_frequency_per_day"] == 0.0 and data["change_lead_time_seconds_p50"] is None, data
+    assert data["change_fail_rate"] is None and data["counts"]["deployments"] == 0, data
+
+
+@test
+def dora_negative_lead_time_clamped_and_counted():
+    data = metrics([commit("a", "2026-09-02T10:05:00Z"), deploy("D1", "2026-09-02T10:00:00Z", ["a"])])
+    assert data["change_lead_time_seconds_p50"] == 0 and data["anomalies"]["negative_lead_time_pairs"] == 1, data
+
+
+@test
+def dora_revert_of_revert_is_one_change():
+    data = metrics([commit("a", "2026-09-02T08:00:00Z"), commit("b", "2026-09-02T09:00:00Z", reverts="a"),
+                    commit("c", "2026-09-02T09:30:00Z", reverts="b"), deploy("D1", "2026-09-02T10:00:00Z", ["a", "b", "c"])])
+    assert data["counts"]["changes"] == 1 and data["anomalies"]["revert_chains_collapsed"] == 2, data
+    assert data["ground_truth"]["true_change_lead_time_seconds_p50"] == 7200, data
+
+
+@test
+def dora_branch_is_ignored_and_empty_deployments_count():
+    data = metrics([commit("h", "2026-09-02T09:00:00Z", branch="hotfix/1"), deploy("D1", "2026-09-02T10:00:00Z", ["h"]),
+                    deploy("D2", "2026-09-03T10:00:00Z", [], outcome="failure")])
+    assert data["counts"]["lead_time_pairs"] == 1 and data["anomalies"]["commits_never_on_main"] == 1, data
+    assert data["anomalies"]["deployments_without_commits"] == 1 and data["change_fail_rate"] == 0.5, data
+
+
+@test
+def dora_open_failure_and_overlapping_incidents():
+    data = metrics([deploy("D1", "2026-09-02T10:00:00Z", [], outcome="failure"),
+                    deploy("D2", "2026-09-02T11:00:00Z", [], outcome="failure"),
+                    incident("I1", "opened", "2026-09-02T10:10:00Z", ["D1"]),
+                    incident("I2", "opened", "2026-09-02T11:10:00Z", ["D2"]),
+                    incident("I2", "resolved", "2026-09-02T12:00:00Z", ["D2"])])
+    assert data["counts"]["open_failures"] == 1 and data["counts"]["recovered_failures"] == 1, data
+    assert data["failed_deployment_recovery_time_seconds_p50"] == 3600, data
+    assert data["anomalies"]["overlapping_incident_pairs"] == 1, data
+
+
+@test
+def dora_window_and_environment_filter():
+    data = metrics([deploy("D1", "2026-09-22T00:00:00Z", []), deploy("D2", "2026-09-01T00:00:00Z", []),
+                    deploy("D3", "2026-09-05T00:00:00Z", [], env="staging")])
+    assert data["counts"]["deployments"] == 1, data
+
+
+@test
+def dora_rejects_bad_requests():
+    expect_error(*req("POST", "/dora/metrics", {"events": []}), (400, 422))
+    expect_error(*req("POST", "/dora/metrics", {"window": {"from": WINDOW["to"], "to": WINDOW["from"]}, "events": []}), (400, 422))
+    expect_error(*req("POST", "/dora/metrics", {"window": WINDOW, "events": {}}), (400, 422))
+    expect_error(*req("POST", "/dora/metrics", {"window": WINDOW, "events": [commit("b", "2026-09-02T09:00:00Z", reverts="zz")]}), (400, 422))
+
+
+@test
+def dora_ticket_events_stream():
+    tid = create(clock="2026-10-14T10:00:00Z")["id"]
+    drive(tid, ["ack", "start", "resolve"], start="2026-10-14T10:00:00Z")
+    status, data = req("GET", "/dora/ticket-events")
+    assert status == 200 and isinstance(data, list), (status, data)
+    mine = [e for e in data if e["ticket_id"] == tid]
+    assert [e["phase"] for e in mine] == ["created", "acknowledged", "resolved"], mine
+    assert [e["state"] for e in mine] == ["new", "acknowledged", "resolved"], mine
+    keys = [(at(e["at"]), e["ticket_id"]) for e in data]
+    assert keys == sorted(keys), "stream not ordered by (at, ticket_id)"
+
+
 # ---- runner ------------------------------------------------------------------------------------------
 
 def wait_for_health(seconds=60):

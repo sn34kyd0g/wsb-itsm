@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import clock, sla, store, tickets
+from . import clock, dora, sla, store, tickets
 from .errors import ApiError
 
 
@@ -92,3 +92,17 @@ async def apply_action(ticket_id: str, action: str, request: Request):
         ticket = tickets.transition(get_or_404(ticket_id), action, now)
         store.update(ticket)
     return ticket
+
+
+@app.post("/dora/metrics")
+async def dora_metrics(request: Request):
+    try:
+        body = json.loads(await request.body())
+    except (ValueError, UnicodeDecodeError):
+        raise ApiError(422, "validation", "request body must be valid JSON")
+    return dora.compute(body)
+
+
+@app.get("/dora/ticket-events")
+async def dora_ticket_events():
+    return dora.ticket_events(store.list_tickets())
