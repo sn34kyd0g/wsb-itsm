@@ -22,6 +22,10 @@ def init() -> None:
         " id TEXT PRIMARY KEY, state TEXT NOT NULL, priority TEXT NOT NULL,"
         " created_at TEXT NOT NULL, doc TEXT NOT NULL)"
     )
+    _conn.execute(
+        "CREATE TABLE IF NOT EXISTS ticket_history ("
+        " seq INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, doc TEXT NOT NULL)"
+    )
 
 
 @contextmanager
@@ -64,3 +68,14 @@ def update(ticket: dict) -> None:
             "UPDATE tickets SET state = ?, priority = ?, doc = ? WHERE id = ?",
             (ticket["state"], ticket["priority"], json.dumps(ticket), ticket["id"]),
         )
+
+
+def append_history(entry: dict) -> None:
+    with _lock:
+        _conn.execute("INSERT INTO ticket_history (ticket_id, doc) VALUES (?, ?)", (entry["ticket_id"], json.dumps(entry)))
+
+
+def history(ticket_id: str) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT doc FROM ticket_history WHERE ticket_id = ? ORDER BY seq", (ticket_id,)).fetchall()
+    return [json.loads(row[0]) for row in rows]

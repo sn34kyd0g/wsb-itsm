@@ -429,6 +429,35 @@ def dora_ticket_events_stream():
     assert keys == sorted(keys), "stream not ordered by (at, ticket_id)"
 
 
+# ---- Lab 2 METR feature: GET /tickets/{id}/history ----------------------------------------------------
+
+@test
+def history_records_every_transition():
+    tid = create(clock="2026-10-14T10:00:00Z")["id"]
+    drive(tid, ["ack", "start", "resolve", "reopen"], start="2026-10-14T10:00:00Z")
+    status, data = req("GET", f"/tickets/{tid}/history")
+    assert status == 200, (status, data)
+    assert [e["action"] for e in data] == ["create", "ack", "start", "resolve", "reopen"], data
+    assert [(e["from_state"], e["to_state"]) for e in data] == [
+        (None, "new"), ("new", "acknowledged"), ("acknowledged", "in_progress"),
+        ("in_progress", "resolved"), ("resolved", "in_progress")], data
+    assert [at(e["at"]) for e in data] == [at("2026-10-14T10:00:00Z") + timedelta(minutes=5 * i) for i in range(5)], data
+
+
+@test
+def history_skips_rejected_transitions():
+    tid = create()["id"]
+    status, _ = act(tid, "close", T1)
+    assert status == 409
+    status, data = req("GET", f"/tickets/{tid}/history")
+    assert status == 200 and [e["action"] for e in data] == ["create"], (status, data)
+
+
+@test
+def history_of_unknown_ticket_is_404():
+    expect_error(*req("GET", "/tickets/does-not-exist-7a1/history"), (404,))
+
+
 # ---- runner ------------------------------------------------------------------------------------------
 
 def wait_for_health(seconds=60):

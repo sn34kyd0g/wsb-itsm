@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import clock, dora, sla, store, tickets
+from . import clock, dora, history, sla, store, tickets
 from .errors import ApiError
 
 
@@ -61,7 +61,9 @@ async def create_ticket(request: Request):
     except (ValueError, UnicodeDecodeError):
         raise ApiError(422, "validation", "request body must be valid JSON")
     ticket = tickets.new_ticket(tickets.validate_create(body), now)
-    store.insert(ticket)
+    with store.locked():
+        store.insert(ticket)
+        store.append_history(history.created(ticket))
     return ticket
 
 
@@ -83,14 +85,23 @@ async def get_sla(ticket_id: str, request: Request):
     return sla.sla_status(get_or_404(ticket_id), now)
 
 
+@app.get("/tickets/{ticket_id}/history")
+async def get_history(ticket_id: str, request: Request):
+    clock.now(request)
+    get_or_404(ticket_id)
+    return store.history(ticket_id)
+
+
 @app.post("/tickets/{ticket_id}/{action}")
 async def apply_action(ticket_id: str, action: str, request: Request):
     if action not in tickets.ACTIONS:
         raise ApiError(404, "not_found", f"unknown action {action}")
     now = clock.now(request)
     with store.locked():
-        ticket = tickets.transition(get_or_404(ticket_id), action, now)
+        before = get_or_404(ticket_id)
+        ticket = tickets.transition(before, action, now)
         store.update(ticket)
+        store.append_history(history.entry(ticket_id, action, before["state"], ticket["state"], now))
     return ticket
 
 
