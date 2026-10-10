@@ -1,0 +1,17 @@
+# ai-generated: 100% - Claude Code wrote this from M-31 and the Prometheus Operator ServiceMonitor API
+# k8s/servicemonitor.yaml - lets the kube-prometheus-stack Prometheus scrape svcdesk's /metrics (Stretch 3, M-31).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: svcdesk
+  namespace: default
+  labels:
+    app: svcdesk
+spec:
+  selector:
+    matchLabels:
+      app: svcdesk
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

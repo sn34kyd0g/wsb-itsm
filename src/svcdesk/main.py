@@ -1,4 +1,4 @@
-# ai-generated: 100% - Claude Code (spec-kit implement) wrote this from contracts/openapi.yaml and API.md
+# ai-generated: 100% - Claude Code (spec-kit implement) wrote this from contracts/openapi.yaml and API.md; Lab 3 routes too
 """HTTP wiring: routes and error handlers. Domain rules live in tickets.py and sla.py."""
 import json
 from contextlib import asynccontextmanager
@@ -8,17 +8,23 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import clock, dora, history, sla, store, tickets
+from . import clock, dora, history, kb, metrics, sla, store, tickets
 from .errors import ApiError
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init()
-    yield
+    kb.open_client()
+    try:
+        yield
+    finally:
+        await kb.close_client()
 
 
 app = FastAPI(title="svcdesk", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(metrics.MetricsMiddleware)
+app.add_api_route("/metrics", metrics.metrics_endpoint, methods=["GET"], include_in_schema=False)
 
 
 def error_response(status: int, code: str, message: str) -> JSONResponse:
@@ -51,6 +57,11 @@ def get_or_404(ticket_id: str) -> dict:
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "svcdesk"}
+
+
+@app.get("/kb/search")
+async def kb_search(q: str | None = None):
+    return await kb.search(kb.validate_query(q))
 
 
 @app.post("/tickets", status_code=201)

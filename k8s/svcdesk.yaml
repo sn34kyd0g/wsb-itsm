@@ -1,0 +1,58 @@
+# ai-generated: 100% - Claude Code wrote this minimal Deployment and Service for the Stretch 3 cluster
+# k8s/svcdesk.yaml - svcdesk in kind, so that k8s/servicemonitor.yaml selects a real target (Stretch 3, M-31).
+# The image is built from this repository and loaded into kind:
+#   docker build -t svcdesk:lab3 .
+#   kind load docker-image svcdesk:lab3 --name lab3
+# kb-index is not deployed: /health and /metrics are enough here (/kb/search would answer 502).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svcdesk
+  namespace: default
+  labels:
+    app: svcdesk
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svcdesk
+  template:
+    metadata:
+      labels:
+        app: svcdesk
+    spec:
+      containers:
+        - name: svcdesk
+          image: svcdesk:lab3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KB_INDEX_URL
+              value: http://kb-index:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svcdesk
+  namespace: default
+  labels:
+    app: svcdesk
+spec:
+  selector:
+    app: svcdesk
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

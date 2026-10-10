@@ -1,0 +1,56 @@
+# ai-generated: 80% - drafted with Claude from the burn-rate arithmetic in slo.md; thresholds and timings verified with promtool
+# prometheus/alerts.yml - the two availability alerts declared in slo.md (MONITORING-SPEC.md M-17 to M-21).
+# Objective 0.99, so the error budget is 1 %. A burn rate b means a share b x (1 - 0.99) of the requests is bad.
+# Each alert is multiwindow: the long window says the budget is really being spent, the short window says it still is
+# now, so the alert resets within minutes of the failures stopping. The thresholds are written into the alerts
+# (M-18), not hidden in recording rules.
+groups:
+  - name: svcdesk-slo
+    rules:
+      # Burn rate 14.4 over 1h / 5m: 14.4 x 1h / 720h = 2 % of the 30-day budget gone when it fires. Pages (P1).
+      - alert: KbSearchAvailabilityBurnFast
+        expr: |
+          (
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search", http_response_status_code=~"5.."}[1h]))
+              /
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search"}[1h]))
+              > 14.4 * (1 - 0.99)
+          )
+          and
+          (
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search", http_response_status_code=~"5.."}[5m]))
+              /
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search"}[5m]))
+              > 14.4 * (1 - 0.99)
+          )
+        for: 2m
+        labels:
+          service: svcdesk
+          slo: availability
+          severity: P1
+        annotations:
+          summary: "GET /kb/search is failing: 14.4x error-budget burn over 1h and 5m (2 % of the 30-day budget gone). Check kb-index and the svcdesk logs."
+
+      # Burn rate 6 over 6h / 30m: 6 x 6h / 720h = 5 % of the 30-day budget gone when it fires. Goes to chat (P2).
+      - alert: KbSearchAvailabilityBurnSlow
+        expr: |
+          (
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search", http_response_status_code=~"5.."}[6h]))
+              /
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search"}[6h]))
+              > 6 * (1 - 0.99)
+          )
+          and
+          (
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search", http_response_status_code=~"5.."}[30m]))
+              /
+            sum(rate(http_server_request_duration_seconds_count{job="svcdesk", http_route="/kb/search"}[30m]))
+              > 6 * (1 - 0.99)
+          )
+        for: 5m
+        labels:
+          service: svcdesk
+          slo: availability
+          severity: P2
+        annotations:
+          summary: "GET /kb/search keeps failing: 6x error-budget burn over 6h and 30m (5 % of the 30-day budget gone). Look at kb-index in working hours."

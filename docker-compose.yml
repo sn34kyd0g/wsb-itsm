@@ -1,6 +1,6 @@
 # Course template - Lab 1 compose contract (API.md section 9).
 # The checker enforces: a service named exactly "svcdesk", port 8080 inside the container,
-# SVCDESK_TEST_CLOCK set, no host-path bind mounts on any service, and images that need
+# SVCDESK_TEST_CLOCK set, no host-path bind mounts on svcdesk and kb-index (Lab 3: prometheus/grafana may have them), and images that need
 # no network once built (dependencies are installed at build time, never at start).
 services:
   svcdesk:
@@ -9,6 +9,9 @@ services:
       - "8080:8080"               # recommended for local work; the checker removes it in container mode
     environment:
       SVCDESK_TEST_CLOCK: "1"     # required: enables the X-Test-Clock header (API.md section 8)
+      KB_INDEX_URL: http://kb-index:8080   # Lab 3 M-02; the code falls back to this value when unset
+    depends_on:
+      - kb-index
     volumes:
       - svcdesk-data:/data        # a NAMED volume is fine; "./data:/data" (a bind mount) fails check 1.02
     # Recommended, not required: a healthcheck makes "docker compose up --wait" wait for readiness.
@@ -19,6 +22,37 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
+
+  # Lab 3 (M-01): the knowledge-base index svcdesk calls on every GET /kb/search. Its latency profile is derived
+  # from SEEDED_TOXIC_LOGIN; the checker overrides image and login with its own.
+  kb-index:
+    image: ghcr.io/swasik/seeded-toxic:2026
+    environment:
+      SEEDED_TOXIC_LOGIN: sn34kyd0g        # the owner of repository: in itsmlab.yaml, lower-cased
+    ports:
+      - "8081:8080"                        # optional: /stats and /admin/degrade from the laptop
+    # No healthcheck: the image has no shell, so a command run inside it never passes (L3-CORE-1.04).
+
+  # Not started by the checker; `docker compose --profile observability up -d`.
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro    # prometheus.yml and alerts.yml; `docker compose restart prometheus`
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    profiles: ["observability"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"    # dashboards readable without a login;
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer   # log in as admin (password admin at first) to edit
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
   # Stretch S3 (own tests): uncomment and adapt. The checker builds every image up front
   # (docker compose --profile tests build; a tests image that does not build costs S3, never Core), then runs

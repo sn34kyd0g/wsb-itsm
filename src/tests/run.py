@@ -1,11 +1,13 @@
-# ai-generated: 100% - Claude Code (spec-kit implement) wrote this suite from spec.md acceptance scenarios
+# ai-generated: 100% - Claude Code (spec-kit implement) wrote this suite from spec.md acceptance scenarios and Lab 3 M-02 to M-07
 """Own HTTP test suite (Stretch S3). Stdlib only; talks to SVCDESK_URL.
 
 Run: python -m tests.run (from src/). The last stdout line is ITSMLAB-TESTS: passed=<n> failed=<m>.
 Decisions under test: C1 = business, C2 = immutable, C3 = matrix.
 """
+import asyncio
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -456,6 +458,122 @@ def history_skips_rejected_transitions():
 @test
 def history_of_unknown_ticket_is_404():
     expect_error(*req("GET", "/tickets/does-not-exist-7a1/history"), (404,))
+
+
+# ---- Lab 3: /kb/search and /metrics against the running stack (kb-index is the real course image) -----
+
+def get_text(path):
+    with urllib.request.urlopen(BASE + path, timeout=10) as resp:
+        return resp.status, resp.headers.get("Content-Type", ""), resp.read().decode()
+
+
+@test
+def kb_search_refuses_bad_q():
+    for path in ("/kb/search", "/kb/search?q=", "/kb/search?q=" + "x" * 201):
+        expect_error(*req("GET", path), (400,))
+
+
+@test
+def kb_search_upstream_failure_is_502():
+    status, data = req("GET", "/kb/search?q=force-error-own-suite")
+    expect_error(status, data, (502,))
+    assert data["error"]["code"] == "upstream_unavailable", data
+
+
+@test
+def kb_search_passes_hits_through():
+    for _ in range(3):  # kb-index fails a small share of ordinary searches on purpose
+        status, data = req("GET", "/kb/search?q=vpn%20drops")
+        if status != 502:
+            break
+    assert status == 200, (status, data)
+    assert data["query"] == "vpn drops" and isinstance(data["hits"], list) and data["hits"], data
+
+
+@test
+def metrics_exposes_histogram_with_route_templates():
+    req("GET", "/tickets/own-suite-raw-id-9f3")
+    req("GET", "/kb/search")
+    status, ctype, text = get_text("/metrics")
+    assert status == 200 and ctype.startswith("text/plain") and "version=0.0.4" in ctype, (status, ctype)
+    assert "# TYPE http_server_request_duration_seconds histogram" in text
+    assert 'http_route="/tickets/{ticket_id}"' in text and "own-suite-raw-id-9f3" not in text
+    line = re.search(r'^http_server_request_duration_seconds_count\{(.*)\} ', text, re.M)
+    assert line and sorted(re.findall(r'(\w+)="', line.group(1))) == [
+        "http_request_method", "http_response_status_code", "http_route"], line
+    assert any(l.startswith("http_server_request_duration_seconds_count{") and 'http_route="/kb/search"' in l
+               and 'http_response_status_code="400"' in l for l in text.splitlines()), "no /kb/search 400 counted"
+
+
+# ---- Lab 3: /kb/search in-process, against a fake upstream (needs the service's own dependencies) -----
+
+def in_process(handler, path):
+    """Runs one request through the app with kb-index replaced by handler; returns status, body, upstream calls."""
+    import httpx
+    from svcdesk import kb
+    from svcdesk.main import app
+
+    calls = []
+
+    def recording(request):
+        calls.append(request)
+        return handler(request)
+
+    async def run():
+        kb.client = httpx.AsyncClient(transport=httpx.MockTransport(recording))
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svcdesk") as c:
+                resp = await c.get(path)
+                return resp.status_code, resp.json()
+        finally:
+            await kb.close_client()
+
+    status, data = asyncio.run(run())
+    return status, data, calls
+
+
+def fake_hits(request):
+    import httpx
+    return httpx.Response(200, json={"query": "x", "hits": [{"id": "KE-1", "title": "t", "score": 0.5}]})
+
+
+def raising(exc_name):
+    def handler(request):
+        import httpx
+        raise getattr(httpx, exc_name)("fake", request=request)
+    return handler
+
+
+try:
+    import httpx  # noqa: F401
+    import svcdesk.main  # noqa: F401
+    HAVE_APP = True
+except ImportError:
+    HAVE_APP = False
+
+if HAVE_APP:
+    @test
+    def fake_upstream_one_call_encoded_hits_unchanged():
+        status, data, calls = in_process(fake_hits, "/kb/search?q=vpn%20drops%2Fx")
+        assert status == 200, (status, data)
+        assert data == {"query": "vpn drops/x", "hits": [{"id": "KE-1", "title": "t", "score": 0.5}]}, data
+        assert len(calls) == 1, calls
+        assert calls[0].method == "GET" and calls[0].url.raw_path == b"/search?q=vpn%20drops%2Fx", calls[0].url
+
+    @test
+    def fake_upstream_non_200_timeout_and_connect_error_are_502():
+        import httpx
+        handlers = [lambda r: httpx.Response(503, json={"error": {"code": "index_unavailable"}}),
+                    raising("ReadTimeout"), raising("ConnectError")]
+        for handler in handlers:
+            status, data, calls = in_process(handler, "/kb/search?q=itsmlab")
+            assert status == 502 and data["error"]["code"] == "upstream_unavailable", (status, data)
+            assert len(calls) == 1, calls
+
+    @test
+    def fake_upstream_not_called_for_bad_q():
+        status, data, calls = in_process(fake_hits, "/kb/search?q=" + "y" * 201)
+        assert status == 400 and isinstance(data.get("error"), dict) and calls == [], (status, data, calls)
 
 
 # ---- runner ------------------------------------------------------------------------------------------

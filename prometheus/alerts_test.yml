@@ -1,0 +1,146 @@
+# ai-generated: 80% - drafted with Claude; the edges were found with promtool and the file was checked against mutants of alerts.yml
+# prometheus/alerts_test.yml - promtool unit tests of alerts.yml (MONITORING-SPEC.md M-20, M-21). Run it from the
+# repository root with
+#   docker run --rm -v "$PWD/prometheus:/p" -w /p --entrypoint promtool prom/prometheus:v3.15.0 test rules alerts_test.yml
+#
+# Every test feeds a /kb/search counter at 10 requests per second (600 a minute) next to the same amount of noise on
+# another route, so a rule without the route filter would be diluted and would not fire. The error ratio of a burn is
+# the share of those 600 requests that come back 502. `values: '0+600x70'` is 71 samples, one per `interval`: 0, 600,
+# ..., 42000; `'0x70'` is 71 zeros; the next token continues at the next sample.
+#
+# Each alert has two kinds of test:
+#   - a burn at about twice its threshold, with BOTH edges: not firing one evaluation before the first firing
+#     evaluation (kills `for - 5m` and `threshold / 1.5`, which fire earlier), firing at it (kills `for + 5m` and
+#     `threshold x 1.5`, which fire later or never). The first firing evaluation was found with promtool. The same
+#     test also checks that the alert still fires while the burn goes on and is gone soon after it stops, the
+#     multiwindow property;
+#   - a long burn at 90 % of the threshold that must never fire (also kills `threshold / 1.5`).
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # KbSearchAvailabilityBurnFast: healthy for 70 minutes, then 30 % of the requests fail for 60 minutes (about twice the
+  # 14.4 % threshold), then healthy again. The one-hour error ratio crosses 14.4 % at 99m, so the alert is pending at
+  # 99m and 100m and `for: 2m` makes it fire at 101m.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="200"}'
+        values: '0+600x70 42420+420x59 67800+600x39'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="502"}'
+        values: '0x70 180+180x59 10800x39'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/tickets/{id}", http_response_status_code="200"}'
+        values: '0+600x170'
+    alert_rule_test:
+      # the lower edge: still pending, not firing
+      - eval_time: 1h40m
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts: []
+      # the upper edge: the first firing evaluation
+      - eval_time: 1h41m
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels:
+              service: svcdesk
+              slo: availability
+              severity: P1
+            exp_annotations:
+              summary: "GET /kb/search is failing: 14.4x error-budget burn over 1h and 5m (2 % of the 30-day budget gone). Check kb-index and the svcdesk logs."
+      # still firing at the end of the burn
+      - eval_time: 2h10m
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels:
+              service: svcdesk
+              slo: availability
+              severity: P1
+            exp_annotations:
+              summary: "GET /kb/search is failing: 14.4x error-budget burn over 1h and 5m (2 % of the 30-day budget gone). Check kb-index and the svcdesk logs."
+      # gone: the 5-minute window has been clean since the burn stopped
+      - eval_time: 2h20m
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts: []
+
+  # KbSearchAvailabilityBurnFast must stay quiet at 13 % failing (90 % of the threshold), however long it lasts.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="200"}'
+        values: '0+600x70 42522+522x229'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="502"}'
+        values: '0x70 78+78x229'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/tickets/{id}", http_response_status_code="200"}'
+        values: '0+600x300'
+    alert_rule_test:
+      # 80 minutes below the threshold: not firing
+      - eval_time: 2h30m
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts: []
+      # and after 230 minutes
+      - eval_time: 5h
+        alertname: KbSearchAvailabilityBurnFast
+        exp_alerts: []
+
+  # KbSearchAvailabilityBurnSlow: healthy for 370 minutes (the 6-hour window is full), then 12 % of the requests fail for
+  # 330 minutes (twice the 6 % threshold), then healthy again. The six-hour error ratio crosses 6 % at 550m and
+  # `for: 5m` makes the alert fire at 555m.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="200"}'
+        values: '0+600x370 222528+528x329 396840+600x59'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="502"}'
+        values: '0x370 72+72x329 23760x59'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/tickets/{id}", http_response_status_code="200"}'
+        values: '0+600x760'
+    alert_rule_test:
+      # the lower edge: not firing yet
+      - eval_time: 9h14m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts: []
+      # the upper edge: the first firing evaluation
+      - eval_time: 9h15m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels:
+              service: svcdesk
+              slo: availability
+              severity: P2
+            exp_annotations:
+              summary: "GET /kb/search keeps failing: 6x error-budget burn over 6h and 30m (5 % of the 30-day budget gone). Look at kb-index in working hours."
+      # still firing at the end of the burn
+      - eval_time: 11h40m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels:
+              service: svcdesk
+              slo: availability
+              severity: P2
+            exp_annotations:
+              summary: "GET /kb/search keeps failing: 6x error-budget burn over 6h and 30m (5 % of the 30-day budget gone). Look at kb-index in working hours."
+      # gone: the 30-minute window has been clean for a while
+      - eval_time: 12h10m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts: []
+
+  # KbSearchAvailabilityBurnSlow must stay quiet at 5.4 % failing (90 % of the threshold), for twelve and a half hours.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="200"}'
+        values: '0+600x370 222567.6+567.6x749'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/kb/search", http_response_status_code="502"}'
+        values: '0x370 32.4+32.4x749'
+      - series: 'http_server_request_duration_seconds_count{job="svcdesk", instance="svcdesk:8080", http_request_method="GET", http_route="/tickets/{id}", http_response_status_code="200"}'
+        values: '0+600x1120'
+    alert_rule_test:
+      # 230 minutes below the threshold: not firing
+      - eval_time: 10h
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts: []
+      # 630 minutes (10.5 hours) below the threshold: not firing
+      - eval_time: 16h40m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts: []
+      # 750 minutes (12.5 hours): still not firing
+      - eval_time: 18h40m
+        alertname: KbSearchAvailabilityBurnSlow
+        exp_alerts: []
