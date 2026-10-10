@@ -27,8 +27,8 @@ All numbers below come from my own `load 3` runs on my login's kb-index profile 
 2,400 requests each). The p99 was 0.297 s, 0.287 s and 0.283 s in three runs; in the first two the median was 34.5 and
 34.9 ms, p90 50 ms, p95 59 ms, p99.99 0.365 and 0.337 s. About 3 % of the requests (73 in each of those two runs) form a
 slow mode between roughly 0.2 s and 0.37 s, and that is where the p99 lives. Nothing was slower than 0.37 s in about
-4,800 requests. kb-index itself failed on 3 of those 4,797 requests (0.06 %; 0.125 % in the worse run), which svcdesk
-passes on as a 502.
+4,800 requests. kb-index itself failed on 17 of about 14,400 requests over six runs (0.12 %; between 0 and 0.25 % per
+run), which svcdesk passes on as a 502.
 
 ## Availability
 
@@ -39,10 +39,11 @@ histogram (job `svcdesk`).
 **Objective:** 99 % over 30 days. **Error budget:** 1 %, which is 0.01 x 43,200 minutes = 432 minutes of a complete
 outage (or 1 % of the requests).
 
-**Why 99 %:** the failures I cannot fix are kb-index's own. They use about 6 to 12 % of a 99 % budget. A 99.9 % objective
-would have a budget of only 0.1 % and the dependency alone would use 60 to 125 % of it, so in a bad stretch the SLO
-would be broken by a service I do not control, and Lab 6's canary gate would roll back honest releases. 99 % leaves
-most of the budget for real incidents and releases.
+**Why 99 %:** the failures I cannot fix are kb-index's own. At 0.12 % on average (0 to 0.25 % per run) they use about
+12 % of a 99 % budget, up to 25 % in a bad run. A 99.9 % objective would have a budget of only 0.1 %, and the dependency
+alone would use more than all of it (about 120 %, up to 250 % in a bad run), so the SLO would be broken by a service I
+do not control, and Lab 6's canary gate would roll back honest releases. 99 % leaves about 88 % of the budget for real
+incidents and releases.
 
 ## Latency
 

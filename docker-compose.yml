@@ -54,6 +54,16 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
+  # Stretch 2 (L3-STRETCH-2, M-30): Toxiproxy in front of svcdesk, only under the "gap" profile, so it never starts
+  # with `docker compose up svcdesk kb-index`. `docker compose --profile gap up -d toxiproxy`, then create the proxy
+  # and its toxic through the API on 8474 from gap/proxy.json and gap/toxic.json (gap/README.md).
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0   # the tag has no "v"
+    profiles: ["gap"]
+    ports:
+      - "8474:8474"                        # the API
+      - "8666:8666"                        # the proxy in front of svcdesk
+
   # Stretch S3 (own tests): uncomment and adapt. The checker builds every image up front
   # (docker compose --profile tests build; a tests image that does not build costs S3, never Core), then runs
   #   docker compose --profile tests run --rm --build tests
