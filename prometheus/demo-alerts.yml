@@ -1,0 +1,116 @@
+# ai-generated: 90% - drafted with Claude from INCIDENT-SPEC.md, then re-tuned on the three recorded incidents; the thresholds and the policy are my decisions
+# prometheus/demo-alerts.yml - symptom alerts on the shop (INCIDENT-SPEC.md I-01, I-02, I-05).
+#
+# Page on what the shop's users feel (Lecture 4 slide 7): checkout failing (P1) and checkout slow (P1). Every fault the
+# injector draws makes checkout fail or slow down, so one of the two pages on every draw. Chat (P2, P3) gets the
+# secondary symptoms and a cause, which are hints for the investigation and never wake anyone.
+#
+# How the rules are built:
+#   - Span metrics arrive once a minute, so every rate() has a window of 5 minutes.
+#   - Only SPAN_KIND_SERVER spans: what a service answered to its callers. The load generator's own client calls fail
+#     on the healthy shop.
+#   - The duration histogram is in milliseconds.
+#   - The playground's traffic is small: checkout answers 5 to 9 orders a minute, so a 5-minute window holds 25 to 45
+#     orders. At that size a ratio is a handful of orders: a fault that fails one order in ten failed just two orders
+#     in a whole recorded run, and a fault that slows one order in nine leaves one or two slow orders in a window.
+#     That decides three things:
+#       * errors: more than 2 % of the orders AND at least 2 failed orders in the window. The healthy shop has none
+#         (checked on the baselines of the recordings), and the count keeps one stray error from paging;
+#       * latency: the p99 of the window, not the p95. At this size the p95 skips the single slow order a window
+#         often holds (on the recorded latency incident it was above the threshold for under two minutes at a
+#         time); the p99 sees it. The healthy shop answers in under 100 ms, the threshold is 3 s, the faults add 5 s
+#         or more;
+#       * a traffic floor of 0.02 requests/s (about 6 per 5 minutes): the first minutes after a start are too few
+#         requests to say anything.
+#   - `for` is 1m on the P1s and 5m on the P2 and P3, so when one symptom crosses several thresholds at once the page
+#     starts first and is the detecting alert (I-12). All rules sit in ONE group, so equal starts go to the most severe.
+#   - `keep_firing_for` keeps a flickering alert in one firing run instead of letting it end, and fire again, in the
+#     middle of the fault (the end of the first run is the recovery, I-13).
+#   - `system: shop` is a static label on every rule here: the inhibit rule of alertmanager.yml matches on it.
+groups:
+  - name: shop-symptoms
+    rules:
+      # P1: more than 2 % of the orders fail, and at least two did. paymentFailure and productCatalogFailure fail orders.
+      - alert: CheckoutErrorRate
+        expr: |
+          (
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              /
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_kind="SPAN_KIND_SERVER"}[5m]))
+              > 0.02
+          )
+          and
+          sum(increase(traces_span_metrics_calls_total{service_name="checkout", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m])) >= 2
+          and
+          sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_kind="SPAN_KIND_SERVER"}[5m])) > 0.02
+        for: 1m
+        keep_firing_for: 2m
+        labels:
+          service: checkout
+          system: shop
+          severity: P1
+        annotations:
+          summary: "More than 2 % of checkout orders fail ({{ $value | humanizePercentage }} over the last 5 minutes)"
+          description: "Customers cannot place orders. Which service is failing under checkout, and what changed (feature flags)?"
+
+      # P1: some orders take more than 3 s (p99 over 5 minutes). intlShippingSlowdown slows about one order in nine by 5 s
+      # or more, productCatalogLockContention stalls them for 30 s.
+      - alert: CheckoutLatencyHigh
+        expr: |
+          (
+            histogram_quantile(0.99, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name="checkout", span_kind="SPAN_KIND_SERVER"}[5m])))
+              > 3000
+          )
+          and
+          sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_kind="SPAN_KIND_SERVER"}[5m])) > 0.02
+        for: 1m
+        keep_firing_for: 2m
+        labels:
+          service: checkout
+          system: shop
+          severity: P1
+        annotations:
+          summary: "Checkout is slow: p99 {{ $value | printf \"%.0f\" }} ms over the last 5 minutes (threshold 3000 ms)"
+          description: "Customers wait for their orders. Which step of the order is slow (shipping, product catalog, payment), and what changed (feature flags)?"
+
+      # P2: more than 5 % of the frontend's requests fail. A secondary symptom of the same incidents: chat.
+      - alert: FrontendErrorRate
+        expr: |
+          (
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              /
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend", span_kind="SPAN_KIND_SERVER"}[5m]))
+              > 0.05
+          )
+          and
+          sum(rate(traces_span_metrics_calls_total{service_name="frontend", span_kind="SPAN_KIND_SERVER"}[5m])) > 0.02
+        for: 5m
+        keep_firing_for: 5m
+        labels:
+          service: frontend
+          system: shop
+          severity: P2
+        annotations:
+          summary: "More than 5 % of frontend requests fail ({{ $value | humanizePercentage }} over the last 5 minutes)"
+          description: "Pages of the shop return errors. Often the same incident as a checkout page; look at which route fails."
+
+      # P3: more than 5 % of the payment service's charges fail. A cause, not a symptom: chat only.
+      - alert: PaymentErrorRate
+        expr: |
+          (
+            sum(rate(traces_span_metrics_calls_total{service_name="payment", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+              /
+            sum(rate(traces_span_metrics_calls_total{service_name="payment", span_kind="SPAN_KIND_SERVER"}[5m]))
+              > 0.05
+          )
+          and
+          sum(rate(traces_span_metrics_calls_total{service_name="payment", span_kind="SPAN_KIND_SERVER"}[5m])) > 0.02
+        for: 5m
+        keep_firing_for: 5m
+        labels:
+          service: payment
+          system: shop
+          severity: P3
+        annotations:
+          summary: "More than 5 % of payment charges fail ({{ $value | humanizePercentage }} over the last 5 minutes)"
+          description: "A cause worth knowing about while checkout fails. Check the payment service's recent changes."

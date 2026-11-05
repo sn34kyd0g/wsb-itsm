@@ -1,0 +1,60 @@
+{
+  "investigator": {
+    "agent": "course agent loop (agent/agent.py, OpenAI-compatible, Docker image itsm-agent)",
+    "model": "gemini-3.5-flash-lite",
+    "mcp_server": "prom_mcp.py (mcp 2.2.0)",
+    "transcript": "ai-rca/transcript.md"
+  },
+  "hypotheses": [
+    {
+      "id": "H1",
+      "hypothesis": "Hypothesis 1: The lack of span metric data points returned by `sum by (service_name, status_code) (rate(traces_span_metrics_calls_total[1m]))` suggests that span metrics collection or reporting was impaired or disabled during the incident window.",
+      "component": null,
+      "predicts": "absent(traces_span_metrics_calls_total) == 1 or max(count_over_time(traces_span_metrics_calls_total[5m])) < 4",
+      "at": "2026-11-05T17:06:00Z",
+      "result": false,
+      "verdict": "hallucinated",
+      "evidence": "Run 1, step 12. The prediction is false at 17:06:00Z (nothing returned). The snapshot holds 116 traces_span_metrics_calls_total series with 5 samples each in the 5-minute window, so span metrics were collected all through the incident. The empty results the agent saw came from its own rate(...[1m]) windows: the pipeline pushes one sample a minute, so a 1-minute window never holds the two samples rate() needs. The agent took an artefact of its query for an outage of the telemetry. It did not go beyond the alerts: it never called alerts_at and named no service."
+    },
+    {
+      "id": "H2",
+      "hypothesis": "Hypothesis 2: Because `sum by (service_name) (rate(traces_span_metrics_calls_total[1m]))` returned no results, specific error rates and latencies for the checkout service and its dependencies could not be isolated directly via span metrics in Prometheus.",
+      "component": null,
+      "predicts": "absent(sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"checkout|product-catalog|shipping|payment|cart|currency|email\", status_code=\"STATUS_CODE_ERROR\"}[5m]))) == 1 or absent(histogram_quantile(0.99, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"checkout|product-catalog|shipping|payment|cart|currency|email\"}[5m])))) == 1",
+      "at": "2026-11-05T17:06:00Z",
+      "result": false,
+      "verdict": "hallucinated",
+      "evidence": "Run 1, step 12. The prediction is false at 17:06:00Z: the same data answers what the agent said it could not. Over [5m] the error rate by service is product-catalog 0.221/s and checkout 0.067/s (nothing at 16:52:25Z), and the latency is there too (checkout PlaceOrder p99 13,350 ms, shipping POST /ship-order p99 13,750 ms). The agent failed because it asked rate(...[1m]) of one-sample-a-minute data, not because span metrics cannot isolate rates and latencies. It did not go beyond the alerts: no alerts_at call, no service named as a cause."
+    },
+    {
+      "id": "H3",
+      "hypothesis": "**Hypothesis 1 (Product Catalog Failures):** The checkout service encounters errors because calls to the product-catalog service (`oteldemo.ProductCatalogService/GetProduct`) are returning error status codes.",
+      "component": "product-catalog",
+      "predicts": "sum(rate(traces_span_metrics_calls_total{service_name=\"checkout\", span_name=\"oteldemo.CheckoutService/PlaceOrder\", span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\"}[5m])) > 0 and on() sum(rate(traces_span_metrics_calls_total{service_name=\"checkout\", span_name=\"oteldemo.ProductCatalogService/GetProduct\", span_kind=\"SPAN_KIND_CLIENT\", status_code=\"STATUS_CODE_ERROR\"}[5m])) > 0",
+      "at": "2026-11-05T17:06:00Z",
+      "result": true,
+      "verdict": "correct",
+      "evidence": "Run 3, step 13. True at 17:06:00Z: checkout's client spans for oteldemo.ProductCatalogService/GetProduct failed at 0.033/s and checkout's PlaceOrder failed at 0.033/s over the 5-minute window; at 16:52:25Z (5 minutes before the onset) neither had an error series, so the query returned nothing. The agent found this on its own: its query at 17:00:19Z showed product-catalog GetProduct ERROR 0.119/s against 1.99/s OK, and 0.013/s on checkout's GetProduct and PlaceOrder. It went beyond what the alerts told it: CheckoutErrorRate and CheckoutLatencyHigh name only checkout, FrontendErrorRate only frontend, and the agent never called alerts_at."
+    },
+    {
+      "id": "H4",
+      "hypothesis": "**Hypothesis 2 (Checkout Latency):** Checkout latency is elevated significantly due to slow downstream execution times in `oteldemo.CheckoutService/PlaceOrder` and internal preparation spans like `prepareOrderItemsAndShippingQuoteFromCart`.",
+      "component": "checkout",
+      "predicts": "histogram_quantile(0.99, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"checkout\", span_name=\"oteldemo.CheckoutService/PlaceOrder\", span_kind=\"SPAN_KIND_SERVER\"}[5m]))) > 3000 unless on() histogram_quantile(0.99, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"checkout\", span_name=\"prepareOrderItemsAndShippingQuoteFromCart\"}[5m]))) > 1000",
+      "at": "2026-11-05T17:06:00Z",
+      "result": true,
+      "verdict": "partially_correct",
+      "evidence": "Run 3, step 13. The part that held (A): PlaceOrder p99 was 13,350 ms at 17:06:00Z against 49.6 ms at 16:52:25Z. The part that did not (B): prepareOrderItemsAndShippingQuoteFromCart, which the agent blames, had p99 36.8 ms (42.0 ms at the baseline), so it was not slow; `A unless on() B` returns A only because B (that span's p99 above 1000 ms) is empty. The time went into the call to shipping: POST /ship-order p99 13,750 ms at 17:06:00Z against about 2 ms at the baseline. The agent's own step-8 output showed it (ship-order 13,350 ms next to PlaceOrder 13,350 ms and prepare 45 ms) but it never named shipping. The first half restates the CheckoutLatencyHigh alert; the internal-preparation half is the agent's own and wrong."
+    },
+    {
+      "id": "H5",
+      "hypothesis": "**Hypothesis 3 (Product Catalog Downstream Errors impacting Checkout):** The product-catalog service is experiencing a high rate of errors (`STATUS_CODE_ERROR`) on its `GetProduct` method, which directly cascades into failing checkout requests.",
+      "component": "product-catalog",
+      "predicts": "sum(rate(traces_span_metrics_calls_total{service_name=\"product-catalog\", span_name=\"oteldemo.ProductCatalogService/GetProduct\", span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name=\"product-catalog\", span_name=\"oteldemo.ProductCatalogService/GetProduct\", span_kind=\"SPAN_KIND_SERVER\"}[5m])) > 0.02 and on() sum(rate(traces_span_metrics_calls_total{service_name=\"checkout\", span_name=\"oteldemo.CheckoutService/PlaceOrder\", span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\"}[5m])) > 0",
+      "at": "2026-11-05T17:06:00Z",
+      "result": true,
+      "verdict": "correct",
+      "evidence": "Run 3, step 13. True at 17:06:00Z: product-catalog's GetProduct server spans failed at 0.221/s, 10.4 % of that method's calls over the 5-minute window, and checkout's PlaceOrder failed at 0.033/s; at 16:52:25Z there was no error series for either, so the query returned nothing. This is H3 seen from the other end of the call (the server side instead of checkout's client side): the agent stated the same finding twice rather than a third idea. It went beyond the alerts, none of which names product-catalog."
+    }
+  ]
+}

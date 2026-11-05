@@ -1,0 +1,23 @@
+{
+  "id": "3ff294eb-a5e1-4a07-b24f-35cad8855940",
+  "title": "Shop checkout degraded, paged by CheckoutErrorRate and CheckoutLatencyHigh",
+  "description": "",
+  "reporter": {
+    "name": "on-call",
+    "email": null,
+    "vip": false
+  },
+  "impact": 1,
+  "urgency": 1,
+  "priority": "P1",
+  "state": "acknowledged",
+  "created_at": "2026-11-05T17:02:08.792480Z",
+  "acknowledged_at": "2026-11-05T17:02:13.769907Z",
+  "resolved_at": null,
+  "closed_at": null,
+  "related_to": null,
+  "sla": {
+    "ack_due_at": "2026-11-06T07:15:00Z",
+    "resolve_due_at": "2026-11-06T11:00:00Z"
+  }
+}

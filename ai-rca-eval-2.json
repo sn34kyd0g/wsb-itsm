@@ -1,0 +1,40 @@
+{
+  "investigator": {
+    "agent": "course agent loop (agent/agent.py, OpenAI-compatible, Docker image itsm-agent), run from a patched copy: 13 s pause before every model call, up to 14 retries 30 s apart on 429 and 5xx, step limit 12; prompts and tools unchanged",
+    "model": "gemini-3.1-flash-lite",
+    "mcp_server": "prom_mcp.py (mcp 2.2.0)",
+    "transcript": "ai-rca/second/transcript.md"
+  },
+  "hypotheses": [
+    {
+      "id": "H1",
+      "hypothesis": "**Cascading failure initiated by ProductCatalogService:** There was a significant spike in errors in the `product-catalog` service that aligns with the errors in `checkout`.",
+      "component": "product-catalog",
+      "predicts": "sum(rate(traces_span_metrics_calls_total{service_name=\"product-catalog\", span_name=\"oteldemo.ProductCatalogService/GetProduct\", span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\"}[5m])) > 0.05 and on() sum(rate(traces_span_metrics_calls_total{service_name=\"checkout\", span_name=\"oteldemo.CheckoutService/PlaceOrder\", span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\"}[5m])) > 0",
+      "at": "2026-11-05T17:06:00Z",
+      "result": true,
+      "verdict": "correct",
+      "evidence": "Last run in the file (gemini-3.1-flash-lite, fifth start), step 8. True at 17:06:00Z: product-catalog's GetProduct server spans failed at 0.221/s, 10.4 % of that method's calls over the 5-minute window, and checkout's PlaceOrder failed at 0.033/s; at 16:52:25Z (5 minutes before the onset) neither had an error series, so the query returned nothing. The agent got there from the data: its step-3 query (checkout errors by span_name) lists oteldemo.ProductCatalogService/GetProduct with exactly PlaceOrder's error rate, and product-catalog's own series is in its by-service error queries (steps 5 and 7; the transcript keeps only the first 3000 characters of those results). It went beyond what the alerts told it: they name only checkout and frontend, the agent did not call alerts_at in this run, and the question named only checkout. The sentence carries no number, but the query behind it is the right one."
+    },
+    {
+      "id": "H2",
+      "hypothesis": "**Resource exhaustion in CheckoutService:** The 95th percentile latency of the `checkout` service spiked during the same period as the errors, suggesting the service may have been overwhelmed or resources were depleted.",
+      "component": "checkout",
+      "predicts": "container_memory_usage_total_bytes{container_name=\"checkout\"} / container_memory_usage_limit_bytes{container_name=\"checkout\"} > 0.8",
+      "at": "2026-11-05T17:06:00Z",
+      "result": false,
+      "verdict": "hallucinated",
+      "evidence": "Last run in the file, step 8. False at 17:06:00Z (nothing returned): checkout's container used 21.5 % of its memory limit (20.8 % at 16:52:25Z, 22.2 % at the highest point between 16:45Z and 17:25Z) and about 0.006 of one CPU core, so nothing was exhausted. The latency the agent cites does not spike either: the p95 of all checkout spans was 26.2 ms at 16:52:25Z, 23.7 ms at 17:06:00Z and 46.2 ms at its highest (17:10:00Z), which is the result it saw at step 6 and called a spike. What did go slow is the tail of PlaceOrder (p99 13,350 ms at 17:06:00Z), and that time is spent waiting on shipping (POST /ship-order p99 13,750 ms), not on checkout's resources. The one resource that really ran out in this incident is the recommendation service's memory (46.4 to 499.9 MiB of 500, restart at 17:09:06Z), and the agent ran no memory or CPU query on any service, so its 'resource exhaustion' is a stock guess about the wrong service, not a finding. It did not go beyond the alerts: 'checkout is slow' is CheckoutLatencyHigh, and the mechanism is the agent's own, untested."
+    },
+    {
+      "id": "H3",
+      "hypothesis": "**Frontend traffic surge contributing to overload:** The number of error-inducing calls increased significantly across the frontend and frontend-proxy, likely reflecting a surge in user traffic that stressed backend dependencies.",
+      "component": "frontend",
+      "predicts": "sum(rate(traces_span_metrics_calls_total{service_name=\"frontend\", span_kind=\"SPAN_KIND_SERVER\"}[5m])) > 5.4",
+      "at": "2026-11-05T17:06:00Z",
+      "result": false,
+      "verdict": "hallucinated",
+      "evidence": "Last run in the file, step 8. False at 17:06:00Z (nothing returned): the frontend's server spans ran at 4.22/s over the 5-minute window against 3.57/s at 16:52:25Z, +18 %, and 4.22/s is the highest minute between 16:50Z and 17:25Z (the range is 3.47 to 4.22/s); a surge, taken as 1.5 times the pre-incident rate, would be above 5.4/s. The load generator's client spans rose 15 % (2.10 to 2.41/s) and frontend-proxy's server spans 20 % (1.84 to 2.22/s), so there was no flood of user traffic. The first half of the claim is true: at 17:06:00Z frontend server errors were 0.442/s and frontend-proxy's 0.221/s, against nothing at 16:52:25Z, but those are the effect of the failing dependencies, not a cause. No query the agent ran measured traffic: the query it gives for this hypothesis is its by-service error-rate query, the same one it gives for H1. It did not go beyond the alerts: frontend errors are FrontendErrorRate (which the agent did not read in this run; it took them from its own by-service query), and the surge is its own addition."
+    }
+  ]
+}

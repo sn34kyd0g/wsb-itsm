@@ -1,0 +1,36 @@
+# ai-generated: 90% - drafted with Claude; the cases are my real alerts (demo-alerts.yml, alerts.yml) and I ran them with amtool
+# alertmanager/routing-tests.yml - the cases that prove the routing tree (INCIDENT-SPEC.md I-06 to I-08; checks
+# L4-CORE-2.06 to 2.08).
+#
+# routes: the static labels of a real alert plus its alertname, and the receivers `amtool config routes test` prints.
+# inhibitions: each case runs on a fresh Alertmanager; the source and the target are posted together as firing alerts.
+routes:
+  - labels: {alertname: CheckoutErrorRate, service: checkout, system: shop, severity: P1}
+    receivers: [pager]
+  - labels: {alertname: CheckoutLatencyHigh, service: checkout, system: shop, severity: P1}
+    receivers: [pager]
+  - labels: {alertname: FrontendErrorRate, service: frontend, system: shop, severity: P2}
+    receivers: [chat]
+  - labels: {alertname: PaymentErrorRate, service: payment, system: shop, severity: P3}
+    receivers: [chat]
+  - labels: {alertname: KbSearchAvailabilityBurnFast, service: svcdesk, slo: availability, severity: P1}
+    receivers: [pager]
+  - labels: {alertname: KbSearchAvailabilityBurnSlow, service: svcdesk, slo: availability, severity: P2}
+    receivers: [chat]
+inhibitions:
+  # The shop's page mutes the shop's P2 ...
+  - source: {alertname: CheckoutErrorRate, service: checkout, system: shop, severity: P1}
+    target: {alertname: FrontendErrorRate, service: frontend, system: shop, severity: P2}
+    inhibited: true
+  # ... but not the same alert of another system. Only `system` differs, and `system` is what the rule lists in `equal`.
+  - source: {alertname: CheckoutErrorRate, service: checkout, system: shop, severity: P1}
+    target: {alertname: FrontendErrorRate, service: frontend, system: other, severity: P2}
+    inhibited: false
+  # The shop's P3 is muted too ...
+  - source: {alertname: CheckoutErrorRate, service: checkout, system: shop, severity: P1}
+    target: {alertname: PaymentErrorRate, service: payment, system: shop, severity: P3}
+    inhibited: true
+  # ... but svcdesk's own Lab 3 alert, which carries no `system`, is not: a shop page does not hide it.
+  - source: {alertname: CheckoutErrorRate, service: checkout, system: shop, severity: P1}
+    target: {alertname: KbSearchAvailabilityBurnSlow, service: svcdesk, slo: availability, severity: P2}
+    inhibited: false

@@ -1,4 +1,4 @@
-# ai-generated: 100% - Claude Code (spec-kit implement) wrote this from contracts/openapi.yaml and API.md; Lab 3 routes too
+# ai-generated: 100% - Claude Code (spec-kit implement) wrote this from contracts/openapi.yaml and API.md; Lab 3 routes too; Lab 4 added the /ack route
 """HTTP wiring: routes and error handlers. Domain rules live in tickets.py and sla.py."""
 import json
 from contextlib import asynccontextmanager
@@ -101,6 +101,14 @@ async def get_history(ticket_id: str, request: Request):
     clock.now(request)
     get_or_404(ticket_id)
     return store.history(ticket_id)
+
+
+# Lab 4 (I-16): the acknowledgement has a route of its own, so that the request histogram reports it under
+# /tickets/{ticket_id}/ack and not under the shared /tickets/{ticket_id}/{action}. It has to be registered
+# before that route: the first match wins.
+@app.post("/tickets/{ticket_id}/ack")
+async def ack_ticket(ticket_id: str, request: Request):
+    return await apply_action(ticket_id, "ack", request)
 
 
 @app.post("/tickets/{ticket_id}/{action}")

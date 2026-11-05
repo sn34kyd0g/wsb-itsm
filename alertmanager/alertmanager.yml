@@ -1,0 +1,42 @@
+# ai-generated: 90% - drafted with Claude from INCIDENT-SPEC.md; the routing policy and the inhibition are my decisions
+# alertmanager/alertmanager.yml - the routing tree (INCIDENT-SPEC.md I-04 to I-08; checks L4-CORE-2.04 to 2.08).
+#
+# Policy: P1 pages the on-call (pager); P2 and P3 go to chat and never to the pager; anything without a severity
+# (a heartbeat, say) ends in chat too. svcdesk's Lab 3 alerts (service=svcdesk, slo=...) join the same tree by severity.
+# One incident is one page: while a P1 of the shop pages, the shop's P2 and P3 are muted (they still show as
+# suppressed in Alertmanager and are still firing in Prometheus). An alert without the label `system`, like svcdesk's,
+# is NOT muted: a missing label is not equal to `shop`, so a shop page does not hide a problem in another system.
+#
+# After an edit, reload: curl.exe -X POST http://localhost:9093/-/reload
+global:
+  resolve_timeout: 5m
+route:
+  receiver: chat                  # the root: a child that matches nothing ends here, and no P1 can end here (see below)
+  group_by: [alertname, service]
+  group_wait: 10s                 # the first chat message of a new group waits this long
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="P1"']
+      receiver: pager
+      group_wait: 0s              # a page does not wait: group_wait is part of the MTTA
+    - matchers: ['severity=~"P2|P3"']
+      receiver: chat
+receivers:
+  - name: pager                   # the on-call's phone: http://localhost:18091 shows what reached it
+    webhook_configs:
+      - url: http://pager:8080/hook/pager
+        send_resolved: true
+  - name: chat
+    webhook_configs:
+      - url: http://pager:8080/hook/chat
+        send_resolved: true
+inhibit_rules:
+  # While the shop pages, mute the shop's P2 ...
+  - source_matchers: ['severity="P1"', 'system="shop"']
+    target_matchers: ['severity="P2"']
+    equal: [system]
+  # ... and its P3. `equal: [system]` keeps the mute inside the shop: both alerts must carry the same `system`.
+  - source_matchers: ['severity="P1"', 'system="shop"']
+    target_matchers: ['severity="P3"']
+    equal: [system]
