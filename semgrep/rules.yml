@@ -1,0 +1,35 @@
+# ai-generated: 80% - Claude wrote both rules and their tests from my store.py and clock.py; I ran them with Semgrep 1.178.0 and own them
+rules:
+  - id: svcdesk-store-conn-outside-lock
+    languages: [python]
+    severity: WARNING
+    message: >-
+      The SQLite connection _conn is shared by every request thread (check_same_thread=False) and is only safe
+      under store._lock: use it inside "with _lock:" or "with locked():". The startup DDL in init() runs before
+      the first request and is reported on purpose, as the one place that is allowed to skip the lock.
+    patterns:
+      - pattern: _conn.$METHOD(...)
+      - pattern-not-inside: |
+          with _lock:
+              ...
+      - pattern-not-inside: |
+          with locked():
+              ...
+
+  - id: svcdesk-wall-clock-read
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Constitution Principle IV: clock.py is the only source of "now". clock.utc_now() is the one wall-clock read
+      in svcdesk and the finding on it is expected; anywhere else take "now" from clock.now(request), so that
+      X-Test-Clock works and tests can fix the time. Durations (time.perf_counter, time.monotonic) are not "now".
+    pattern-either:
+      - pattern: datetime.now(...)
+      - pattern: datetime.utcnow()
+      - pattern: datetime.today()
+      - pattern: datetime.datetime.now(...)
+      - pattern: datetime.datetime.utcnow()
+      - pattern: datetime.date.today()
+      - pattern: date.today()
+      - pattern: time.time()
+      - pattern: time.time_ns()
