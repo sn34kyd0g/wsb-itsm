@@ -5,7 +5,10 @@
 # The checker image builds with BuildKit (it ships docker-buildx-plugin), so BuildKit-only syntax such as
 # `RUN --mount=type=cache,...` or `RUN <<EOF` heredocs is fine; if check 1.03 ever says "requires BuildKit",
 # you are running an old checker image: `docker pull ghcr.io/swasik/itsmlab:2026` and rerun.
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
+
+# Fixes published after the base image was built (zlib1g); the digest above pins the base, this brings it up to date.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -14,7 +17,8 @@ WORKDIR /app
 #   fastapi==0.141.1
 #   uvicorn==0.52.4
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# pip is needed only to install. Its vendored msgpack, setuptools and urllib3 carry HIGH findings, so the runtime image has no pip.
+RUN pip install --no-cache-dir -r /app/requirements.txt && pip uninstall -y pip
 
 # Your code lives under src/ (see src/README.md). Adjust the module path in CMD to your layout.
 COPY src/ /app/src/

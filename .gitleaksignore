@@ -3,3 +3,5 @@
 # <file>:<rule id>:<line>, as the gate's log prints it). The ignore-policy job enforces CI-SPEC.md P-06: directly above
 # every entry, '#' lines of your own giving the reason, at least 20 characters in total. Leave the blank line below.
 
+# False positive: line 5320 of k8s/evidence.json is a checksum/secret annotation (a hash of a manifest), not a credential.
+k8s/evidence.json:generic-api-key:5320
